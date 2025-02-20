@@ -1,5 +1,4 @@
 const express = require("express");
-const enableWs = require("express-ws");
 const WebSocket = require("ws");
 const { jsonrepair } = require("jsonrepair");
 require("dotenv").config();
@@ -138,8 +137,5 @@ app.get("/game", async (req, res) => {
 app.get("/", (req, res) => res.send("Express on Vercel"));
 
 app.listen(3000, () => console.log("Server ready on port 3000."));
-
-
-
 
 module.exports = app;

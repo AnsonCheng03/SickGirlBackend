@@ -1,10 +1,11 @@
 const express = require("express");
 const enableWs = require("express-ws");
+const WebSocket = require("ws");
 require("dotenv").config();
 
 const app = express();
 app.use(express.json());
-enableWs(app);
+const wss = new WebSocket.Server({ noServer: true });
 
 const createThread = async () => {
   const response = await fetch("https://api.openai.com/v1/threads", {
@@ -19,54 +20,58 @@ const createThread = async () => {
   return body.id;
 };
 
-app.ws("/ws", (ws, req) => {
-  ws.on("open", () => {
-    console.log("WebSocket connected");
-  });
-
-  ws.on("message", async (message) => {
-    try {
-      const { userInput, threadId } = JSON.parse(message);
-
-      if (!threadId) {
-        ws.send(JSON.stringify({ error: "Missing threadId" }));
-        return;
-      }
-
-      console.log(`Processing chat for thread ${threadId}`);
-      await createRun(userInput, ws, threadId);
-    } catch (error) {
-      console.error("Error processing message:", error);
-      ws.send(JSON.stringify({ error: "Invalid message format" }));
+const sendMessage = async (threadId, userInput) => {
+  const response = await fetch(
+    `https://api.openai.com/v1/threads/${threadId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({ role: "user", content: userInput }),
     }
-  });
-
-  ws.on("close", () => {
-    console.log("WebSocket disconnected");
-  });
-});
+  );
+  const body = await response.json();
+  // console.log("Message sent:", body);
+  return body;
+};
 
 const createRun = async (userInput, ws, threadId) => {
-  const response = await fetch("https://api.openai.com/v1/threads/runs", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "OpenAI-Beta": "assistants=v2",
-    },
-    body: JSON.stringify({
-      assistant_id: process.env.OPENAI_ASSISTANT_ID,
-      stream: true,
-      thread: {
-        id: threadId,
-        messages: [{ role: "user", content: userInput }],
+  ws.send(
+    JSON.stringify({
+      error: `
+    userInput: ${userInput}
+    threadid: ${threadId}
+    `,
+    })
+  );
+
+  const response = await fetch(
+    `https://api.openai.com/v1/threads/${threadId}/runs`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "OpenAI-Beta": "assistants=v2",
       },
-    }),
-  });
+      body: JSON.stringify({
+        assistant_id: process.env.OPENAI_ASSISTANT_ID,
+        stream: true,
+      }),
+    }
+  );
 
   if (!response.ok) {
     ws.send(
       JSON.stringify({ error: `HTTP error! Status: ${response.status}` })
+    );
+    console.error(
+      "HTTP error! Status:",
+      response.status,
+      await response.text()
     );
     return;
   }
@@ -87,7 +92,10 @@ const createRun = async (userInput, ws, threadId) => {
           const data = JSON.parse(line.replace("data: ", "").trim());
           if (data.delta?.content && data.delta.content[0]?.text?.value) {
             fullText += data.delta.content[0].text.value;
-            ws.send(JSON.stringify({ threadId, text: fullText }));
+            // console.log("Full text:", fullText);
+            // const { content, emotion } = JSON.parse(fullText);
+            // ws.send(JSON.stringify({ threadId, message: content, emotion }));
+            ws.send(JSON.stringify({ threadId, message: fullText }));
           }
         } catch (error) {
           console.log("Error parsing JSON:", error, line);
@@ -99,15 +107,42 @@ const createRun = async (userInput, ws, threadId) => {
   ws.send(JSON.stringify({ threadId, done: true }));
 };
 
-app.get("/game", (req, res) => {
-  res.send("Health check");
-});
+// app.get("/game", (req, res) => {
+//   res.send("Health check");
+// });
 
-app.post("/game", async (req, res) => {
-  const threadId = req.body.threadId || (await createThread());
-
+app.get("/game", async (req, res) => {
   // Respond with a WebSocket URL the client can connect to
-  res.json({ websocketUrl: `/ws/game?threadId=${threadId}` });
+  wss.handleUpgrade(req, req.socket, Buffer.alloc(0), (ws) => {
+    ws.on("open", () => {
+      console.log("WebSocket connected");
+    });
+
+    ws.on("message", async (rawMessage) => {
+      try {
+        const message = JSON.parse(rawMessage);
+        const userInput = message.userInput;
+        const threadId = message.threadId || (await createThread());
+
+        if (!threadId) {
+          ws.send(JSON.stringify({ error: "Missing threadId" }));
+          return;
+        }
+
+        await sendMessage(threadId, userInput);
+
+        console.log(`Processing chat for thread ${threadId}`);
+        await createRun(userInput, ws, threadId);
+      } catch (error) {
+        console.error("Error processing message:", error);
+        ws.send(JSON.stringify({ error: "Invalid message format" }));
+      }
+    });
+
+    ws.on("close", () => {
+      console.log("WebSocket disconnected");
+    });
+  });
 });
 
 app.get("/", (req, res) => res.send("Express on Vercel"));

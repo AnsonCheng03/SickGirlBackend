@@ -1,6 +1,7 @@
 const express = require("express");
 const enableWs = require("express-ws");
 const WebSocket = require("ws");
+const { jsonrepair } = require("jsonrepair");
 require("dotenv").config();
 
 const app = express();
@@ -39,15 +40,6 @@ const sendMessage = async (threadId, userInput) => {
 };
 
 const createRun = async (userInput, ws, threadId) => {
-  ws.send(
-    JSON.stringify({
-      error: `
-    userInput: ${userInput}
-    threadid: ${threadId}
-    `,
-    })
-  );
-
   const response = await fetch(
     `https://api.openai.com/v1/threads/${threadId}/runs`,
     {
@@ -92,19 +84,17 @@ const createRun = async (userInput, ws, threadId) => {
           const data = JSON.parse(line.replace("data: ", "").trim());
           if (data.delta?.content && data.delta.content[0]?.text?.value) {
             fullText += data.delta.content[0].text.value;
-            // console.log("Full text:", fullText);
-            // const { content, emotion } = JSON.parse(fullText);
-            // ws.send(JSON.stringify({ threadId, message: content, emotion }));
-            ws.send(JSON.stringify({ threadId, message: fullText }));
+            const { content, emotion } = JSON.parse(jsonrepair(fullText));
+            ws.send(JSON.stringify({ threadId, message: content, emotion }));
           }
         } catch (error) {
-          console.log("Error parsing JSON:", error, line);
+          // console.log("Error:", error);
         }
       }
     });
   }
 
-  ws.send(JSON.stringify({ threadId, done: true }));
+  // ws.send(JSON.stringify({ threadId, done: true }));
 };
 
 // app.get("/game", (req, res) => {
